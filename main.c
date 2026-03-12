@@ -303,6 +303,27 @@ void bigint_mul(BigInt* a, BigInt* b)
     b->msd = saved_b_msd;
 }
 
+BigInt bigint_add_new(BigInt* a, BigInt* b)
+{
+    BigInt result = bigint_copy(a);
+    bigint_add(&result, b);
+    return result;
+}
+
+BigInt bigint_sub_new(BigInt* a, BigInt* b)
+{
+    BigInt result = bigint_copy(a);
+    bigint_sub(&result, b);
+    return result;
+}
+
+BigInt bigint_mul_new(BigInt* a, BigInt* b)
+{
+    BigInt result = bigint_copy(a);
+    bigint_mul(&result, b);
+    return result;
+}
+
 void bigint_print(BigInt* a)
 {
     if (!is_safe(a)) return;
