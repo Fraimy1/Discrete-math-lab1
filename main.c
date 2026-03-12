@@ -28,12 +28,7 @@ void bigint_free(BigInt *num)
 
 void bigint_from_int(BigInt *num, int int_num)
 {
-    unsigned int *tmp = realloc(num->digits, sizeof(unsigned int) * 2);
-    if (tmp == NULL) return;
-    num->digits = tmp;
-
-    num->digits[0] = 1;
-    num->digits[1] = 0;
+    num->digits[0] = 0;
     num->msd = int_num;
 }
 
@@ -81,6 +76,26 @@ unsigned int bigint_get_digit(BigInt *num, unsigned int original_len, size_t i)
     {
         return 0;
     }
+}
+
+int bigint_compare(BigInt* a, BigInt* b)
+{
+    if (!is_safe(a) || !is_safe(b)) return 0;
+
+    if (a->msd != b->msd)
+        return (a->msd > b->msd) ? 1 : -1;
+
+    int sign = (a->msd >= 0) ? 1 : -1;
+
+    if (a->digits[0] != b->digits[0])
+        return (a->digits[0] > b->digits[0]) ? sign : -sign;
+
+    for (unsigned int i = a->digits[0]; i >= 1; i--)
+    {
+        if (a->digits[i] != b->digits[i])
+            return (a->digits[i] > b->digits[i]) ? sign : -sign;
+    }
+    return 0;
 }
 
 BigInt bigint_copy(BigInt* src)
@@ -234,6 +249,60 @@ void bigint_add(BigInt* a, BigInt* b)
     }
 }
 
+void bigint_mul(BigInt* a, BigInt* b)
+{
+    if (!is_safe(a) || !is_safe(b)) return;
+
+    int sign = 1;
+    int saved_b_msd = b->msd;
+    if (a->msd < 0) { sign = -sign; a->msd = -a->msd; }
+    if (b->msd < 0) { sign = -sign; b->msd = -b->msd; }
+
+    unsigned int a_len = a->digits[0] + 1;
+    unsigned int b_len = b->digits[0] + 1;
+    unsigned int res_size = a_len + b_len;
+
+    unsigned int *res = calloc(res_size + 2, sizeof(unsigned int));
+    if (res == NULL) return;
+
+    for (unsigned int j = 1; j <= b_len; j++)
+    {
+        unsigned int bj = bigint_get_digit(b, b->digits[0], j);
+        unsigned int carry = 0;
+
+        for (unsigned int i = 1; i <= a_len; i++)
+        {
+            unsigned int ai = bigint_get_digit(a, a->digits[0], i);
+            unsigned long long prod = (unsigned long long)ai * bj + res[i + j - 1] + carry;
+            res[i + j - 1] = (unsigned int)(prod % BASE);
+            carry = (unsigned int)(prod / BASE);
+        }
+        res[a_len + j] += carry;
+    }
+
+    unsigned int top = res_size;
+    while (top > 1 && res[top] == 0)
+        top--;
+
+    free(a->digits);
+    a->digits = res;
+    a->msd = (int)res[top];
+    a->digits[0] = top - 1;
+    if (a->digits[0] == 0) a->digits[0] = 1;
+
+    while (a->digits[0] > 0 && a->msd == 0)
+    {
+        if ((int)a->digits[a->digits[0]] < 0) break;
+        a->msd = (int)a->digits[a->digits[0]];
+        a->digits[0]--;
+    }
+    if (a->digits[0] == 0) a->digits[0] = 1;
+
+    if (sign < 0)
+        a->msd = -a->msd;
+    b->msd = saved_b_msd;
+}
+
 void bigint_print(BigInt* a)
 {
     if (!is_safe(a)) return;
@@ -349,6 +418,22 @@ void test_sub_big(int a_msd, unsigned int a_d1,
     bigint_free(&b);
 }
 
+void test_mul(int a_val, int b_val, int expected)
+{
+    BigInt a, b;
+    bigint_init(&a);
+    bigint_init(&b);
+    bigint_from_int(&a, a_val);
+    bigint_from_int(&b, b_val);
+    bigint_mul(&a, &b);
+    int result = a.msd;
+    printf("%s: %d * %d = %d (expected %d)\n",
+        result == expected ? "OK" : "FAIL",
+        a_val, b_val, result, expected);
+    bigint_free(&a);
+    bigint_free(&b);
+}
+
 int main(void)
 {
     test_add(3, 4, 7);
@@ -377,6 +462,17 @@ int main(void)
     test_sub_big(3, 100, 1, 50, 2, 50);
     test_sub_big(2, 0, 1, 1, 0, UINT_MAX);
     test_sub_big(1, 0, 1, 0, 0, 0);
+
+    test_mul(3, 4, 12);
+    test_mul(0, 5, 0);
+    test_mul(5, 0, 0);
+    test_mul(0, 0, 0);
+    test_mul(100, 23, 2300);
+    test_mul(-5, 3, -15);
+    test_mul(5, -3, -15);
+    test_mul(-5, -3, 15);
+    test_mul(1, 1000000, 1000000);
+    test_mul(-1, 1, -1);
 
     return 0;
 }
