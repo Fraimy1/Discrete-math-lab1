@@ -57,6 +57,16 @@ unsigned int is_safe(BigInt *num)
     return 1;
 }
 
+void bigint_trim(BigInt* num)
+{
+    while (num->digits[0] > 0 && num->msd == 0)
+    {
+        if ((int)num->digits[num->digits[0]] < 0) break;
+        num->msd = (int)num->digits[num->digits[0]];
+        num->digits[0]--;
+    }
+}
+
 unsigned int bigint_get_digit(BigInt *num, unsigned int original_len, size_t i)
 {
     if (!is_safe(num))
@@ -166,13 +176,7 @@ void bigint_sub(BigInt* a, BigInt* b)
 
     a->msd = (int)a->digits[max_len + 1];
     a->digits[0] = max_len;
-
-    while (a->digits[0] > 0 && a->msd == 0)
-    {
-        if ((int)a->digits[a->digits[0]] < 0) break;
-        a->msd = (int)a->digits[a->digits[0]];
-        a->digits[0]--;
-    }
+    bigint_trim(a);
     if (a->digits[0] == 0) a->digits[0] = 1;
 }
 
@@ -288,14 +292,7 @@ void bigint_mul(BigInt* a, BigInt* b)
     a->digits = res;
     a->msd = (int)res[top];
     a->digits[0] = top - 1;
-    if (a->digits[0] == 0) a->digits[0] = 1;
-
-    while (a->digits[0] > 0 && a->msd == 0)
-    {
-        if ((int)a->digits[a->digits[0]] < 0) break;
-        a->msd = (int)a->digits[a->digits[0]];
-        a->digits[0]--;
-    }
+    bigint_trim(a);
     if (a->digits[0] == 0) a->digits[0] = 1;
 
     if (sign < 0)
@@ -321,6 +318,139 @@ BigInt bigint_mul_new(BigInt* a, BigInt* b)
 {
     BigInt result = bigint_copy(a);
     bigint_mul(&result, b);
+    return result;
+}
+
+void bigint_split_at(BigInt* src, unsigned int m, BigInt* low, BigInt* high)
+{
+    bigint_init(low);
+    bigint_init(high);
+
+    unsigned int total = src->digits[0] + 1;
+
+    if (m >= total)
+    {
+        bigint_free(low);
+        *low = bigint_copy(src);
+        return;
+    }
+
+    if (m == 0)
+    {
+        bigint_free(high);
+        *high = bigint_copy(src);
+        return;
+    }
+
+    free(low->digits);
+    low->digits = malloc(sizeof(unsigned int) * (m + 1));
+    low->digits[0] = m - 1;
+    for (unsigned int i = 1; i < m; i++)
+        low->digits[i] = src->digits[i];
+    low->msd = (int)src->digits[m];
+    bigint_trim(low);
+
+    unsigned int high_len = src->digits[0] - m;
+    free(high->digits);
+    high->digits = malloc(sizeof(unsigned int) * (high_len + 2));
+    high->msd = src->msd;
+    high->digits[0] = high_len;
+    for (unsigned int i = 1; i <= high_len; i++)
+        high->digits[i] = src->digits[m + i];
+    bigint_trim(high);
+}
+
+void bigint_shift(BigInt* num, unsigned int m)
+{
+    if (m == 0) return;
+    if (num->msd == 0 && num->digits[0] == 0) return;
+
+    unsigned int old_len = num->digits[0];
+    unsigned int new_len = old_len + m;
+
+    unsigned int *tmp = realloc(num->digits, sizeof(unsigned int) * (new_len + 2));
+    if (tmp == NULL) return;
+    num->digits = tmp;
+
+    for (unsigned int i = old_len; i >= 1; i--)
+    {
+        num->digits[i + m] = num->digits[i];
+    }
+
+    for (unsigned int i = 1; i <= m; i++)
+    {
+        num->digits[i] = 0;
+    }
+
+    num->digits[0] = new_len;
+}
+
+void bigint_karatsuba_rec(BigInt* a, BigInt* b)
+{
+    unsigned int a_len = a->digits[0] + 1;
+    unsigned int b_len = b->digits[0] + 1;
+
+    if (a_len <= 32 || b_len <= 32)
+    {
+        bigint_mul(a, b);
+        return;
+    }
+
+    unsigned int m = max(a_len, b_len) / 2;
+
+    BigInt a_low, a_high, b_low, b_high;
+    bigint_split_at(a, m, &a_low, &a_high);
+    bigint_split_at(b, m, &b_low, &b_high);
+
+    BigInt z0 = bigint_copy(&a_low);
+    bigint_karatsuba_rec(&z0, &b_low);
+
+    BigInt z2 = bigint_copy(&a_high);
+    bigint_karatsuba_rec(&z2, &b_high);
+
+    bigint_add(&a_low, &a_high);
+    bigint_add(&b_low, &b_high);
+    BigInt z1 = bigint_copy(&a_low);
+    bigint_karatsuba_rec(&z1, &b_low);
+    bigint_sub(&z1, &z0);
+    bigint_sub(&z1, &z2);
+
+    bigint_shift(&z2, 2 * m);
+    bigint_shift(&z1, m);
+    bigint_add(&z0, &z1);
+    bigint_add(&z0, &z2);
+
+    free(a->digits);
+    *a = z0;
+
+    bigint_free(&a_low);
+    bigint_free(&a_high);
+    bigint_free(&b_low);
+    bigint_free(&b_high);
+    bigint_free(&z1);
+    bigint_free(&z2);
+}
+
+void bigint_karatsuba(BigInt* a, BigInt* b)
+{
+    if (!is_safe(a) || !is_safe(b)) return;
+
+    int sign = 1;
+    int saved_b_msd = b->msd;
+    if (a->msd < 0) { sign = -sign; a->msd = -a->msd; }
+    if (b->msd < 0) { sign = -sign; b->msd = -b->msd; }
+
+    bigint_karatsuba_rec(a, b);
+
+    if (sign < 0)
+        a->msd = -a->msd;
+    b->msd = saved_b_msd;
+}
+
+BigInt bigint_karatsuba_new(BigInt* a, BigInt* b)
+{
+    BigInt result = bigint_copy(a);
+    bigint_karatsuba(&result, b);
     return result;
 }
 
@@ -455,6 +585,44 @@ void test_mul(int a_val, int b_val, int expected)
     bigint_free(&b);
 }
 
+void test_karatsuba(int a_val, int b_val, int expected)
+{
+    BigInt a, b;
+    bigint_init(&a);
+    bigint_init(&b);
+    bigint_from_int(&a, a_val);
+    bigint_from_int(&b, b_val);
+    bigint_karatsuba(&a, &b);
+    int result = a.msd;
+    printf("%s: karatsuba %d * %d = %d (expected %d)\n",
+        result == expected ? "OK" : "FAIL",
+        a_val, b_val, result, expected);
+    bigint_free(&a);
+    bigint_free(&b);
+}
+
+void test_karatsuba_vs_mul(int a_val, int b_val)
+{
+    BigInt a1, b1, a2, b2;
+    bigint_init(&a1);
+    bigint_init(&b1);
+    bigint_init(&a2);
+    bigint_init(&b2);
+    bigint_from_int(&a1, a_val);
+    bigint_from_int(&b1, b_val);
+    bigint_from_int(&a2, a_val);
+    bigint_from_int(&b2, b_val);
+    bigint_mul(&a1, &b1);
+    bigint_karatsuba(&a2, &b2);
+    int ok = bigint_compare(&a1, &a2) == 0;
+    printf("%s: mul vs karatsuba %d * %d\n",
+        ok ? "OK" : "FAIL", a_val, b_val);
+    bigint_free(&a1);
+    bigint_free(&b1);
+    bigint_free(&a2);
+    bigint_free(&b2);
+}
+
 int main(void)
 {
     test_add(3, 4, 7);
@@ -494,6 +662,22 @@ int main(void)
     test_mul(-5, -3, 15);
     test_mul(1, 1000000, 1000000);
     test_mul(-1, 1, -1);
+
+    test_karatsuba(3, 4, 12);
+    test_karatsuba(0, 5, 0);
+    test_karatsuba(5, 0, 0);
+    test_karatsuba(0, 0, 0);
+    test_karatsuba(100, 23, 2300);
+    test_karatsuba(-5, 3, -15);
+    test_karatsuba(5, -3, -15);
+    test_karatsuba(-5, -3, 15);
+    test_karatsuba(1, 1000000, 1000000);
+    test_karatsuba(-1, 1, -1);
+
+    test_karatsuba_vs_mul(12345, 67890);
+    test_karatsuba_vs_mul(-99999, 99999);
+    test_karatsuba_vs_mul(2147483647, 2);
+    test_karatsuba_vs_mul(-2147483647, -2147483647);
 
     return 0;
 }
