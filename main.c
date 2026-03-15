@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
+#include <time.h>
 
 //TODO: add more safety checks for ->digits == NULL and a/b == NULL
 
@@ -11,6 +12,18 @@ typedef struct BigInt
     int msd; // most significant digit
     unsigned int *digits;
 } BigInt;
+
+typedef void (*mul_func)(BigInt*, BigInt*);
+
+unsigned int high_word(unsigned int x)
+{
+    return x >> 16;
+}
+
+unsigned int low_word(unsigned int x)
+{
+    return x & 0xFFFF;
+}
 
 void bigint_init(BigInt *num)
 {
@@ -177,7 +190,6 @@ void bigint_sub(BigInt* a, BigInt* b)
     a->msd = (int)a->digits[max_len + 1];
     a->digits[0] = max_len;
     bigint_trim(a);
-    if (a->digits[0] == 0) a->digits[0] = 1;
 }
 
 void bigint_add(BigInt* a, BigInt* b)
@@ -293,7 +305,6 @@ void bigint_mul(BigInt* a, BigInt* b)
     a->msd = (int)res[top];
     a->digits[0] = top - 1;
     bigint_trim(a);
-    if (a->digits[0] == 0) a->digits[0] = 1;
 
     if (sign < 0)
         a->msd = -a->msd;
@@ -451,6 +462,102 @@ BigInt bigint_karatsuba_new(BigInt* a, BigInt* b)
 {
     BigInt result = bigint_copy(a);
     bigint_karatsuba(&result, b);
+    return result;
+}
+
+void bigint_mod_pow2(BigInt* num, unsigned int n)
+{
+    if (n == 0)
+    {
+        num->msd = 0;
+        num->digits[0] = 0;
+        return;
+    }
+
+    unsigned int full_words = n / 32;
+    unsigned int leftover = n % 32;
+    unsigned int keep = full_words + (leftover > 0 ? 1 : 0);
+    unsigned int total = num->digits[0] + 1;
+
+    if (keep > total) return;
+    if (keep == total && leftover == 0) return;
+
+    if (keep <= num->digits[0])
+        num->msd = (int)num->digits[keep];
+
+    num->digits[0] = keep - 1;
+
+    if (leftover > 0)
+    {
+        unsigned int mask = (1u << leftover) - 1;
+        num->msd = (int)((unsigned int)num->msd & mask);
+    }
+
+    bigint_trim(num);
+}
+
+BigInt af(mul_func mul, int n)
+{
+    BigInt fact;
+    bigint_init(&fact);
+    bigint_from_int(&fact, 1);
+
+    for (int i = 2; i <= n; i++)
+    {
+        BigInt tmp;
+        bigint_init(&tmp);
+        bigint_from_int(&tmp, i);
+        mul(&fact, &tmp);
+        bigint_free(&tmp);
+    }
+
+    BigInt result;
+    bigint_init(&result);
+    bigint_from_int(&result, 0);
+
+    for (int i = 1; i <= n; i++)
+    {
+        BigInt term;
+        bigint_init(&term);
+        bigint_from_int(&term, i);
+        mul(&term, &fact);
+
+        if ((n - i) % 2 != 0)
+            term.msd = -term.msd;
+
+        bigint_add(&result, &term);
+        bigint_free(&term);
+    }
+
+    bigint_free(&fact);
+    return result;
+}
+
+BigInt count(mul_func mul, unsigned int n)
+{
+    BigInt base, result;
+    bigint_init(&base);
+    bigint_init(&result);
+    bigint_from_int(&base, 115249);
+    bigint_from_int(&result, 1);
+
+    unsigned int exp = 4183;
+
+    while (exp > 0)
+    {
+        if (exp % 2 == 1)
+        {
+            mul(&result, &base);
+            bigint_mod_pow2(&result, n);
+        }
+        BigInt tmp = bigint_copy(&base);
+        mul(&base, &tmp);
+        bigint_free(&tmp);
+        bigint_mod_pow2(&base, n);
+        exp /= 2;
+    }
+
+    bigint_free(&base);
     return result;
 }
 
@@ -678,6 +785,52 @@ int main(void)
     test_karatsuba_vs_mul(-99999, 99999);
     test_karatsuba_vs_mul(2147483647, 2);
     test_karatsuba_vs_mul(-2147483647, -2147483647);
+
+    BigInt af1 = af(bigint_mul, 1);
+    printf("%s: af(1) = %d (expected 1)\n", af1.msd == 1 ? "OK" : "FAIL", af1.msd);
+    bigint_free(&af1);
+
+    BigInt af2 = af(bigint_mul, 2);
+    printf("%s: af(2) = %d (expected 2)\n", af2.msd == 2 ? "OK" : "FAIL", af2.msd);
+    bigint_free(&af2);
+
+    BigInt af3 = af(bigint_mul, 3);
+    printf("%s: af(3) = %d (expected 12)\n", af3.msd == 12 ? "OK" : "FAIL", af3.msd);
+    bigint_free(&af3);
+
+    BigInt c1 = count(bigint_mul, 64);
+    BigInt c2 = count(bigint_karatsuba, 64);
+    printf("%s: count(64) schoolbook vs karatsuba\n",
+        bigint_compare(&c1, &c2) == 0 ? "OK" : "FAIL");
+    bigint_free(&c1);
+    bigint_free(&c2);
+
+    printf("\n--- Benchmarks ---\n");
+    clock_t start, end;
+
+    start = clock();
+    BigInt af_school = af(bigint_mul, 200);
+    end = clock();
+    printf("af(schoolbook, 200): %.4f sec\n", (double)(end - start) / CLOCKS_PER_SEC);
+    bigint_free(&af_school);
+
+    start = clock();
+    BigInt af_karat = af(bigint_karatsuba, 200);
+    end = clock();
+    printf("af(karatsuba,  200): %.4f sec\n", (double)(end - start) / CLOCKS_PER_SEC);
+    bigint_free(&af_karat);
+
+    start = clock();
+    BigInt cnt_school = count(bigint_mul, 4096);
+    end = clock();
+    printf("count(schoolbook, 4096): %.4f sec\n", (double)(end - start) / CLOCKS_PER_SEC);
+    bigint_free(&cnt_school);
+
+    start = clock();
+    BigInt cnt_karat = count(bigint_karatsuba, 4096);
+    end = clock();
+    printf("count(karatsuba,  4096): %.4f sec\n", (double)(end - start) / CLOCKS_PER_SEC);
+    bigint_free(&cnt_karat);
 
     return 0;
 }
