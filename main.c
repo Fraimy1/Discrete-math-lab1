@@ -514,7 +514,7 @@ BigInt af(mul_func mul, int n)
     BigInt result;
     bigint_init(&result);
     bigint_from_int(&result, 0);
-
+No
     for (int i = 1; i <= n; i++)
     {
         BigInt term;
@@ -523,9 +523,10 @@ BigInt af(mul_func mul, int n)
         mul(&term, &fact);
 
         if ((n - i) % 2 != 0)
-            term.msd = -term.msd;
+            bigint_sub(&result, &term);
+        else
+            bigint_add(&result, &term);
 
-        bigint_add(&result, &term);
         bigint_free(&term);
     }
 
@@ -797,6 +798,14 @@ int main(void)
     BigInt af3 = af(bigint_mul, 3);
     printf("%s: af(3) = %d (expected 12)\n", af3.msd == 12 ? "OK" : "FAIL", af3.msd);
     bigint_free(&af3);
+
+    BigInt af5 = af(bigint_mul, 5);
+    printf("%s: af(5) = %d (expected 360)\n", af5.msd == 360 ? "OK" : "FAIL", af5.msd);
+    bigint_free(&af5);
+
+    BigInt af5k = af(bigint_karatsuba, 5);
+    printf("%s: af_karatsuba(5) = %d (expected 360)\n", af5k.msd == 360 ? "OK" : "FAIL", af5k.msd);
+    bigint_free(&af5k);
 
     BigInt c1 = count(bigint_mul, 64);
     BigInt c2 = count(bigint_karatsuba, 64);
